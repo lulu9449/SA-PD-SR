@@ -59,20 +59,18 @@ class Trainer(object):
         self.down_sampler = DataParallel(self.down_sampler)
         info_log(self.log_file, "INFO model parallelled!\n")
         self.loss_function = build_loss()
-        self.optimizer_sr = torch.optim.Adam(self.sr_model.parameters(), lr=0.0005)
+        self.optimizer_sr = torch.optim.Adam(self.sr_model.parameters(), lr=0.00015)
         # optimazer for kernel re-construction
-        self.optimizer_krc = torch.optim.Adam(self.en_decoder.parameters(), lr=0.001)
+        self.optimizer_krc = torch.optim.Adam(self.en_decoder.parameters(), lr=0.00015)
         self.optimizer_all = torch.optim.Adam([
             {'params': self.sr_model.parameters()},
             {'params': self.en_decoder.parameters()}
-        ], lr=0.001)
-        self.scheduler_sr = lr_scheduler.ExponentialLR(self.optimizer_sr, gamma=0.999)
-        self.scheduler_krc = lr_scheduler.ExponentialLR(self.optimizer_krc, gamma=0.999)
-        self.scheduler_all = lr_scheduler.ExponentialLR(self.optimizer_all, gamma=0.999)
-        info_log(self.log_file, "INFO trainer build!\n")
+        ], lr=0.00015)
 
         self.bicubic_ori = bicubic_ori(kernel_width)
         self.bicubic_ori = DataParallel(self.bicubic_ori)
+
+        info_log(self.log_file, "INFO trainer build!\n")
 
     def save_pth(self, ep, step):
         sr_path = os.path.join(self.save_path, "sr_{}_{}.pth".format(ep, step))
@@ -105,14 +103,20 @@ class Trainer(object):
         return lr_imgs, kernels
 
     def train(self, start_ep, num_ep, mode="2"):
+        if mode not in ["1", "2", "3"]:
+            info_log(self.log_file, "ERROR mode must in [1, 2, 3]")
+            return
+
+        optimizer_cur = self.optimizer_krc if mode in ["1"] else self.optimizer_all
+        optimizer_cur = self.optimizer_sr if mode in ["2"] else optimizer_cur
+
+        scheduler_cur = lr_scheduler.StepLR(optimizer_cur, step_size=self.step_num // 22, gamma=0.9)
+
         info_log(self.log_file, "INFO begin training!\n")
         for epoch in range(start_ep, start_ep + num_ep):
             info_log(self.log_file, "\nINFO current epoch {} !\n".format(epoch))
             for batch_id, hr_imgs in enumerate(self.train_data_loader):
-                if mode in ["2", "3"]:
-                    self.optimizer_sr.zero_grad()
-                if mode in ["1", "3"]:
-                    self.optimizer_krc.zero_grad()
+                optimizer_cur.zero_grad()
 
                 hr_imgs = hr_imgs.cuda()
                 lr_imgs, kernels = self.down_sample(hr_imgs)
@@ -121,40 +125,29 @@ class Trainer(object):
                 kernel_pc = kernel_pc.detach()
 
                 sr_imgs, kernel_estimated = self.sr_model.forward(lr_imgs, [hr_imgs.shape[-2], hr_imgs.shape[-1]])
-                # if batch_id % 40 == 39:
-                #     save_tensor2imgs(lr_imgs, os.path.join(self.save_path, "train_imgs"), "lr")
-                #     save_tensor2imgs(torch.cat([sr_imgs, hr_imgs], dim=3), os.path.join(self.save_path, "train_imgs"), "sr_hr")
-                    # save_tensor2imgs(sr_imgs, os.path.join(self.save_path, "train_imgs"), "sr")
-                    # print(lr_imgs.shape, kernels.shape)
-                # break
 
                 loss_sr = self.loss_function(sr_imgs, hr_imgs)
                 loss_ke = self.loss_function(kernel_estimated, kernel_pc)
                 loss_krc = self.loss_function(kernel_rc, kernels)
-                # loss_ke = 0.0
-                # loss_krc = 0.0
+
                 loss_sr_ke = loss_sr + loss_ke
                 loss_all = loss_sr_ke + loss_krc
-                if mode in ["1"]:
-                    loss_krc.backward(retain_graph=True)
-                    self.optimizer_krc.step()
-                elif mode in ["2"]:
-                    loss_sr.backward()
-                    self.optimizer_sr.step()
-                elif mode in ["3"]:
-                    loss_all.backward()
-                    self.optimizer_all.step()
+
+                # 1 for kpc en-decoder; 2 for sr and kernel estimation; 3 for the whole model
+                loss_cur = loss_krc if mode in ["1"] else loss_all
+                loss_cur = loss_sr_ke if mode in ["2"] else loss_cur
+
+                loss_cur.backward()
+                optimizer_cur.step()
+                scheduler_cur.step()
                 if (batch_id + 1) % 5 == 0:
                     loss_list = [loss_sr, loss_ke, loss_krc, loss_sr_ke, loss_all]
                     loss_list = [item.detach() if item != 0 else 0. for item in loss_list]
-                    self.scheduler_krc.step()
-                    self.scheduler_sr.step()
-                    self.scheduler_all.step()
                     # loss_names = ["loss_sr", "loss_ke", "loss_krc", "loss_sr_ke", "loss_all"]
                     # loss_dict = dict(zip(loss_names, loss_list))
                     info_log(self.log_file, "INFO ep{} step{}: loss sr:{:.4},ke:{:.4},krc:{:.4},sr&ke:{:.4},sr&ke&krc:{:.4}!".format(epoch, batch_id, *loss_list))
                     # print(torch.max(sr_imgs).detach().cpu().numpy(), torch.min(sr_imgs).detach().cpu().numpy())
-                    print(self.scheduler_sr.get_last_lr())
+                    print(scheduler_cur.get_last_lr())
                     bs, cn, ho, wo = hr_imgs.shape
                     lr_imgs_up = torch.nn.functional.interpolate(lr_imgs, [ho, wo], mode='bicubic', align_corners=True)
                     bicubic_loss = self.loss_function(lr_imgs_up, hr_imgs).detach().cpu().numpy()
@@ -176,7 +169,7 @@ class Trainer(object):
 if __name__ == "__main__":
 
     trainset_dirname = "/data/users/luluzhang/datasets/DIV2K/DIV2K_train_HR_p"
-    batch_size = 24
+    batch_size = 28
     is_train = True
     num_workers = 4
     kernel_width = 22
@@ -191,6 +184,7 @@ if __name__ == "__main__":
     # pre_trained = ["2022_09_02_16_14_30", 11, 5214, 1]  # 周末训练结果
     # pre_trained = ["2022_09_05_14_19_24", 0, 10428, 2]
     # pre_trained = ["2022_09_05_16_49_10", 10, 10428, 1]
+    pre_trained = ["2022_09_21_02_55_08", 1, 4344, 3] #
 
 
     trainer = Trainer(trainset_dirname,
@@ -207,7 +201,7 @@ if __name__ == "__main__":
                       pre_trained
                       )
 
-    trainer.train(0, 1, mode="1")
+    # trainer.train(0, 1, mode="1")
     trainer.train(1, 10, mode="2")
     trainer.close_log()
 
