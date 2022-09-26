@@ -35,7 +35,10 @@ class TrainSet(Dataset):
         imgs_res = get_imgs_path(hr_imgs_path)  #[:800]
         imgs_res.sort()
         self.items = imgs_res  #[:308]
-        self.transform = transform
+        self.transform = transforms.Compose([transforms.ToTensor(),
+                                             transforms.RandomHorizontalFlip(),
+                                             transforms.RandomVerticalFlip(),
+                                             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
 
     def __len__(self):
         return len(self.items)

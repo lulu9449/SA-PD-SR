@@ -59,7 +59,7 @@ class Trainer(object):
         self.down_sampler = DataParallel(self.down_sampler)
         info_log(self.log_file, "INFO model parallelled!\n")
         self.loss_function = build_loss()
-        self.optimizer_sr = torch.optim.Adam(self.sr_model.parameters(), lr=0.00015)
+        self.optimizer_sr = torch.optim.Adam(self.sr_model.parameters(), lr=0.0005)
         # optimazer for kernel re-construction
         self.optimizer_krc = torch.optim.Adam(self.en_decoder.parameters(), lr=0.00015)
         self.optimizer_all = torch.optim.Adam([
@@ -110,7 +110,10 @@ class Trainer(object):
         optimizer_cur = self.optimizer_krc if mode in ["1"] else self.optimizer_all
         optimizer_cur = self.optimizer_sr if mode in ["2"] else optimizer_cur
 
-        scheduler_cur = lr_scheduler.StepLR(optimizer_cur, step_size=self.step_num // 22, gamma=0.9)
+        gamma_1step = pow(0.4, 1.0 / self.step_num) if mode not in ["1"] else 0.9
+        num_step = 1 if mode not in ["1"] else self.step_num // 32
+        info_log(self.log_file, "INFO mode is {}, scheduler gamma is {:.4}, scheduler step num is {}\n".format(mode, gamma_1step, num_step))
+        scheduler_cur = lr_scheduler.StepLR(optimizer_cur, step_size=num_step, gamma=gamma_1step)
 
         info_log(self.log_file, "INFO begin training!\n")
         for epoch in range(start_ep, start_ep + num_ep):
@@ -147,11 +150,11 @@ class Trainer(object):
                     # loss_dict = dict(zip(loss_names, loss_list))
                     info_log(self.log_file, "INFO ep{} step{}: loss sr:{:.4},ke:{:.4},krc:{:.4},sr&ke:{:.4},sr&ke&krc:{:.4}!".format(epoch, batch_id, *loss_list))
                     # print(torch.max(sr_imgs).detach().cpu().numpy(), torch.min(sr_imgs).detach().cpu().numpy())
-                    print(scheduler_cur.get_last_lr())
+                    info_log(self.log_file, "current lr: {}".format(scheduler_cur.get_last_lr()[0]))
                     bs, cn, ho, wo = hr_imgs.shape
                     lr_imgs_up = torch.nn.functional.interpolate(lr_imgs, [ho, wo], mode='bicubic', align_corners=True)
                     bicubic_loss = self.loss_function(lr_imgs_up, hr_imgs).detach().cpu().numpy()
-                    print(epoch, batch_id, loss_list[0], bicubic_loss)
+                    info_log(self.log_file, "ep{} step{}: loss sr {:.5}, loss bicubic {:.5}".format(epoch, batch_id, loss_list[0], bicubic_loss))
                     if (batch_id + 1) % 40 == 0:
                         # save_tensor2imgs(lr_imgs, os.path.join(self.save_path, "train_imgs"), "lr")
                         save_tensor2imgs(torch.cat([lr_imgs_up, sr_imgs, hr_imgs], dim=3), os.path.join(self.save_path, "train_imgs"), "lr_sr_hr")
@@ -169,7 +172,7 @@ class Trainer(object):
 if __name__ == "__main__":
 
     trainset_dirname = "/data/users/luluzhang/datasets/DIV2K/DIV2K_train_HR_p"
-    batch_size = 28
+    batch_size = 24
     is_train = True
     num_workers = 4
     kernel_width = 22
@@ -184,7 +187,8 @@ if __name__ == "__main__":
     # pre_trained = ["2022_09_02_16_14_30", 11, 5214, 1]  # 周末训练结果
     # pre_trained = ["2022_09_05_14_19_24", 0, 10428, 2]
     # pre_trained = ["2022_09_05_16_49_10", 10, 10428, 1]
-    pre_trained = ["2022_09_21_02_55_08", 1, 4344, 3] #
+    # pre_trained = ["2022_09_21_02_55_08", 1, 4344, 3] #
+    pre_trained = ["2022_09_26_04_31_28", 0, 8690, 1]
 
 
     trainer = Trainer(trainset_dirname,
