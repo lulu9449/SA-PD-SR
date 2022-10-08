@@ -1,4 +1,5 @@
 import torch.nn as nn
+import torch
 
 class Encoder(nn.Module):
     def __init__(self, kernel_width, out_channels=10):
@@ -11,6 +12,7 @@ class Encoder(nn.Module):
     def forward(self, kernels):
         kpc = self.tanh(self.conv1(kernels))
         kpc = self.conv2(kpc)
+        kpc = kpc / torch.sum(kpc, dim=1, keepdim=True)
         return kpc
 
 class Decoder(nn.Module):

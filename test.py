@@ -47,13 +47,15 @@ class Tester(object):
         self.log_file = open(os.path.join(self.save_path, "{}_test.txt".format(time_log)), "w")
 
         info_log(self.log_file, "INFO building tester!\n")
-        self.sr_model, _ = build_model(kernel_width, mid_channels_sr, kpc_dims, implicit_dims, img_channels, block_num, interact_num, self.log_file)
+        self.sr_model, self.en_decoder = build_model(kernel_width, mid_channels_sr, kpc_dims, implicit_dims, img_channels, block_num, interact_num, self.log_file)
         # print(type(self.sr_model.parameters()), type(self.en_decoder.parameters()))
         if pre_trained is not None:
             self.load_pth(*pre_trained)
 
         self.sr_model.eval()
         self.sr_model = DataParallel(self.sr_model)
+        self.en_decoder.eval()
+        self.en_decoder = DataParallel(self.en_decoder)
         info_log(self.log_file, "INFO model parallelled!\n")
         info_log(self.log_file, "INFO tester build!\n")
 
@@ -84,8 +86,12 @@ class Tester(object):
                 shape_list = ori_shape + dst_shape
                 info_log(self.log_file, "INFO processing image {} from {}*{}*{} to {}*{}*{}!\n".format(lr_path, *shape_list))
                 with torch.no_grad():
-                    sr_imgs, _ = self.sr_model.forward(lr_imgs, [dst_shape[0], dst_shape[1]])
+                    sr_imgs, estimated_kpc = self.sr_model.forward(lr_imgs, [dst_shape[0], dst_shape[1]])
                     # print(sr_imgs.shape, hr_imgs.shape)
+                    print(estimated_kpc.shape)
+                    print(estimated_kpc[0, 0, :10, :10])
+                    from data_process.process import save_tensor2imgs
+                    save_tensor2imgs(torch.unsqueeze(torch.squeeze(estimated_kpc), dim=1), dir_path="tmp_ekpc", flag="ekpc", auto_scale=True)
                     lr_imgs_up = torch.nn.functional.interpolate(lr_imgs, [dst_shape[0], dst_shape[1]], mode='bicubic', align_corners=True)
                     # print(hr_imgs.shape, hr_imgs.dtype, torch.min(hr_imgs), torch.max(hr_imgs), type(hr_imgs))
 
@@ -118,18 +124,20 @@ class Tester(object):
 
 if __name__ == "__main__":
 
-    hrset_dirname = "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_HR"
-    lrset_dirname = ["/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_bicubic/X4",
-                     "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_bicubic/X3",
-                     "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_bicubic/X2",
-                     "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_difficult",
-                     "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_mild",
-                     "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_unknown/X2",
-                     "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_unknown/X3",
-                     "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_unknown/X4",
-                     "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_wild",
-                     "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_x8",
-                     ]
+    # hrset_dirname = "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_HR"
+    # lrset_dirname = ["/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_bicubic/X4",
+    #                  "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_bicubic/X3",
+    #                  "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_bicubic/X2",
+    #                  "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_difficult",
+    #                  "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_mild",
+    #                  "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_unknown/X2",
+    #                  "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_unknown/X3",
+    #                  "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_unknown/X4",
+    #                  "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_wild",
+    #                  "/data/users/luluzhang/datasets/DIV2K/DIV2K_valid_LR_x8",
+    #                  ]
+    hrset_dirname = "/data/users/luluzhang/datasets/DIV2K/img_test/hr"
+    lrset_dirname = ["/data/users/luluzhang/datasets/DIV2K/img_test/lr"]
     batch_size = 1
     is_train = False
     num_workers = 4
@@ -141,7 +149,7 @@ if __name__ == "__main__":
     block_num = 4
     interact_num = 4
     pre_trained = None
-    pre_trained = ["2022_09_19_10_02_35", 5, 4345, 2]
+    pre_trained = ["2022_09_30_01_19_28", 1, 4344, 3]
 
 
     tester = Tester(hrset_dirname,

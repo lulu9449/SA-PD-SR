@@ -12,15 +12,20 @@ def info_log(log_file, message):
     return
 
 
-def save_tensor2imgs(imgs, dir_path, flag):
+def save_tensor2imgs(imgs, dir_path, flag, auto_scale=False):
     if not os.path.exists(dir_path):
         os.mkdir(dir_path)
     b, c, h, w = imgs.shape
+    if auto_scale:
+        imgs_min = torch.min(torch.min(imgs, dim=2, keepdim=True)[0], dim=3, keepdim=True)[0]
+        imgs_max = torch.max(torch.max(imgs, dim=2, keepdim=True)[0], dim=3, keepdim=True)[0]
+        imgs = (imgs - imgs_min) * 10.0 #/ (imgs_max - imgs_min) * 2.0 - 1.0
     imgs = imgs.detach().cpu().numpy()
     imgs = (imgs + 1.0) * 0.5 * 255.0
     imgs = np.array(np.clip(imgs, 0., 255.), dtype=np.uint8)
     imgs = imgs.transpose((0, 2, 3, 1))
-    imgs = imgs[:, :, :, [2, 1, 0]]
+    if imgs.shape[-1] == 3:
+        imgs = imgs[:, :, :, [2, 1, 0]]
     # print(dir_path, flag)
     for ind in range(b):
         img_name = "{}_{}.png".format(str(ind).zfill(4), flag)
@@ -33,11 +38,14 @@ def save_tensor2imgs(imgs, dir_path, flag):
 
 
 def save_kernel2imgs(kernels, dir_path, flag):
-    bs, _, _, ho, wo, k_w, _ = kernels.shape
+    bs, _, ho, wo, k_s = kernels.shape
+    k_w = int(pow(k_s, 0.5))
     kernels = torch.reshape(kernels, [bs, ho, wo, k_w, k_w])
+    # print(kernels[0,:,0, 11, 11])
     kernels = kernels.permute(0, 1, 3, 2, 4)
     kernels = torch.reshape(kernels, [bs, 1, ho*k_w, wo*k_w]).repeat(1, 3, 1, 1)
     # print(torch.max(kernels), torch.min(kernels))
+    # print(kernels.shape)
     save_tensor2imgs(kernels * 2.0 - 1.0, dir_path, flag)
     return
 

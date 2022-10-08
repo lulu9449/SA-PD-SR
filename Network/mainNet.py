@@ -17,9 +17,9 @@ class SRNetWork(nn.Module):
         self.taus_tail.eval()
         sr_texture = self.initSRer(lr_imgs)
         for _ in range(self.interAct_num):
-        # for _ in range(1):
             ke_texture = self.estimater(lr_imgs, sr_texture)
             sr_texture = self.SRer(lr_imgs, ke_texture)
+        ke_texture = self.estimater(lr_imgs, sr_texture) if self.interAct_num == 0 else ke_texture
         sr_imgs = self.taus_tail(sr_texture, ke_texture, dst_size)
 
         return sr_imgs, ke_texture

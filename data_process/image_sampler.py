@@ -1,3 +1,5 @@
+import random
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -54,11 +56,18 @@ def cubic(offset):
     return f
 
 
+def gaussian(offset):
+    absx2 = offset * offset
+    f = torch.exp(-0.5 * absx2)
+    return f
+
+
+
 def get_sin_clip(step, params_h, params_w, limit_low=None, limit_high=None):
     batch_size = params_h.shape[0]
     step_h, step_w = step
-    resh = torch.sin((step_h * params_h[:, 1:2] + params_h[:, 2:3]) * 2 * 3.1415926) * params_h[:, 0:1] + params_h[:, 3:] + (params_h[:, 0:1] * 0.5)
-    resw = torch.sin((step_w * params_w[:, 1:2] + params_w[:, 2:3]) * 2 * 3.1415926) * params_w[:, 0:1] + params_w[:, 3:] + (params_w[:, 0:1] * 0.5)
+    resh = torch.sin((step_h * params_h[:, 1:2] + params_h[:, 2:3]) * 2 * 3.1415926) * params_h[:, 0:1] + params_h[:, 3:]
+    resw = torch.sin((step_w * params_w[:, 1:2] + params_w[:, 2:3]) * 2 * 3.1415926) * params_w[:, 0:1] + params_w[:, 3:]
     resHW_list = [torch.meshgrid(resh[i], resw[i]) for i in range(batch_size)]
     resHW_list = [torch.unsqueeze(torch.cat([torch.unsqueeze(resH, dim=-1), torch.unsqueeze(resW, dim=-1)], dim=-1), dim=0) for resH, resW in resHW_list]
     res = torch.cat(resHW_list, dim=0)
@@ -72,7 +81,7 @@ def get_sin_clip(step, params_h, params_w, limit_low=None, limit_high=None):
     return res
 
 
-def get_rand_scale_theta(batch_size, out_size):
+def get_rand_scale_theta(batch_size, out_size, scale, scale_limits):
     step_h = torch.linspace(0., 1., steps=out_size[0])
     step_w = torch.linspace(0., 1., steps=out_size[1])
 
@@ -81,9 +90,14 @@ def get_rand_scale_theta(batch_size, out_size):
 
     scaleh_param = torch.rand([2, batch_size, 4]) * factor_scale + bias_scale
     scalew_param = torch.rand([2, batch_size, 4]) * factor_scale + bias_scale
+    low_s, high_s = scale_limits
+    scalew_param[:, :, 0] = (high_s - low_s) * 0.5 * scale[1]
+    scalew_param[:, :, 3] = ((high_s - low_s) * 0.5 + low_s) * scale[1]
+    scaleh_param[:, :, 0] = (high_s - low_s) * 0.5 * scale[0]
+    scaleh_param[:, :, 3] = ((high_s - low_s) * 0.5 + low_s) * scale[0]
+    scaleh = get_sin_clip([step_h, step_w], scaleh_param[0, ...], scalew_param[0, ...], scale[0] * 0.25, scale[0] * 2.5)
+    scalew = get_sin_clip([step_h, step_w], scaleh_param[1, ...], scalew_param[1, ...], scale[1] * 0.25, scale[1] * 2.5)
 
-    scaleh = get_sin_clip([step_h, step_w], scaleh_param[0, ...], scalew_param[0, ...], 0.1, 1.6)
-    scalew = get_sin_clip([step_h, step_w], scaleh_param[1, ...], scalew_param[1, ...], 0.1, 1.6)
 
     bias_theta = torch.Tensor([[[0, 0.1, 0, 0.1]]])
     factor_theta = torch.Tensor([[[3.1416 / 2., 2.0, 1.0, 3.1416 / 2]]])
@@ -96,27 +110,51 @@ def get_rand_scale_theta(batch_size, out_size):
 
 
 
-def scale_rotate_offset(h, w, batch_size, out_size, scale):
-    if scale is not None:
-        scaleh = torch.ones([batch_size, 1, out_size[0], out_size[1], 1, 1, 1]).cuda()*scale[0]
-        scalew = torch.ones([batch_size, 1, out_size[0], out_size[1], 1, 1, 1]).cuda()*scale[1]
-        theta_rotate = torch.zeros([batch_size, 1, out_size[0], out_size[1], 1, 1, 1]).cuda()
-    else:
-        scaleh, scalew, theta_rotate = get_rand_scale_theta(batch_size, out_size)
+def scale_rotate_offset(h, w, batch_size, out_size, scale, bicubic):
+    scaleh = torch.ones([batch_size, 1, out_size[0], out_size[1], 1, 1, 1]).cuda()
+    scalew = torch.ones([batch_size, 1, out_size[0], out_size[1], 1, 1, 1]).cuda()
     h_new = h * scaleh
     w_new = w * scalew
+    if bicubic:
+        scaleh = scaleh * scale[0]
+        scalew = scalew * scale[1]
+        theta_rotate = torch.zeros([batch_size, 1, out_size[0], out_size[1], 1, 1, 1]).cuda()
+    else:
+        low_s, high_s = 0.7, 1.6
+        if random.random() > 0.9:
+            # print("uniform")
+            scaleh = scaleh * scale[0] * (random.random() * (high_s - low_s) + low_s)
+            scalew = scalew * scale[1] * (random.random() * (high_s - low_s) + low_s)
+            theta_rotate = torch.ones([batch_size, 1, out_size[0], out_size[1], 1, 1, 1]).cuda() * (random.random() * 3.14159)
+        else:
+            # print("non uniform")
+            scaleh, scalew, theta_rotate = get_rand_scale_theta(batch_size, out_size, scale, [low_s, high_s])
+    print(scale)
+    print(torch.min(scaleh), torch.max(scaleh), torch.min(scalew), torch.max(scalew))
+    # print(h.shape, w.shape)
+    # print(scaleh.shape, scalew.shape)
+    # print(h_new.shape, w_new.shape)
     kernel_h, kernel_w = h_new.shape[4], h_new.shape[5]
     offset_hw = torch.unsqueeze(torch.cat([h_new, w_new], dim=-1), dim=-1)
     sin_theta = torch.sin(theta_rotate)
     cos_theta = torch.cos(theta_rotate)
     rotate_mat = torch.cat([cos_theta, -sin_theta, sin_theta, cos_theta], dim=-1)
     rotate_mat = torch.reshape(rotate_mat, [-1, 1, out_size[0], out_size[1], 1, 1, 2, 2])
+    # print(scaleh.shape, scalew.shape, theta_rotate.shape, rotate_mat.shape, offset_hw.shape)
+    # print(rotate_mat[0, 0, 0, 0, 0, 0])
+    # print(offset_hw[0,0,0,0,0,0])
+    # print(scaleh[0, 0, 0, 0, 0, 0])
+    # print(scalew[0, 0, 0, 0, 0, 0])
     offset_hw = torch.reshape(torch.matmul(rotate_mat, offset_hw), [-1, 1, out_size[0], out_size[1], kernel_h, kernel_w, 2])
+    # print(offset_hw.shape)
+    # print(offset_hw[0,0,0,0,:,:,0])
+    # print(offset_hw[0, 0, 0, 0, :, :, 1])
+    # print(scaleh.shape, scalew.shape, offset_hw.shape)
 
-    return offset_hw[..., 0], offset_hw[..., 1]
+    return offset_hw[..., 0] * scaleh[..., 0], offset_hw[..., 1] * scalew[..., 0]
 
 
-def get_weight(out_size, batch_size, offset, sample_wise=False, scale=None):
+def get_weight(out_size, batch_size, offset, sample_wise=False, scale=None, bicubic=False):
 
     offset0, offset1 = offset
     kernel_h = offset0.shape[2]
@@ -129,10 +167,19 @@ def get_weight(out_size, batch_size, offset, sample_wise=False, scale=None):
 
     mini_batch = batch_size if sample_wise else 1
 
-    offset_h, offset_w = scale_rotate_offset(offset_hw[..., 0:1], offset_hw[..., 1:], mini_batch, out_size, scale=scale)
+
+    offset_h, offset_w = scale_rotate_offset(offset_hw[..., 0:1], offset_hw[..., 1:], mini_batch, out_size, scale=scale, bicubic=bicubic)
 
     # print(offset_h.shape, offset_w.shape)
-    weight_h, weight_w = cubic(offset_h), cubic(offset_w)
+    # print(offset_h[0, 0, :, 0, 11, 11])
+    if random.random() > 0.5:
+        # print("cubic")
+        weight_h, weight_w = cubic(offset_h), cubic(offset_w)
+    else:
+        # print("gaussian")
+        weight_h, weight_w = gaussian(offset_h), gaussian(offset_w)
+    # print(weight_h.shape, weight_w.shape)
+    # print(weight_h[0, 0, :, 0, 11, 11])
     weight_mat = weight_h * weight_w
 
     weight_sum = torch.sum(weight_mat, dim=[-1, -2], keepdim=True)
@@ -146,10 +193,10 @@ def get_weight(out_size, batch_size, offset, sample_wise=False, scale=None):
     return weight_mat
 
 
-def slice_mul(gpu_tensor, offset, scale):
+def slice_mul(gpu_tensor, offset, scale, normal_bicubic):
     b, c, o_h, o_w, k_s_h, k_s_w = gpu_tensor.shape
     kernel_size = k_s_h * k_s_w
-    batch_size = 16
+    batch_size = 4
     batch_num = int(b // batch_size) + 1 if b % batch_size > 0 else int(b // batch_size)
     batch_res_list = list()
     batch_weight_list = list()
@@ -157,7 +204,8 @@ def slice_mul(gpu_tensor, offset, scale):
         cur_gpu_tensor = gpu_tensor[id * batch_size: (id + 1) * batch_size]
         cur_gpu_tensor = torch.reshape(cur_gpu_tensor, [-1, c, o_h, o_w, kernel_size])
 
-        cur_weight_mat = get_weight([o_h, o_w], cur_gpu_tensor.shape[0], offset, scale=scale)
+        cur_weight_mat = get_weight([o_h, o_w], cur_gpu_tensor.shape[0], offset, scale=scale, bicubic=normal_bicubic)
+
         cur_weight_mat = torch.reshape(cur_weight_mat, [-1, 1, o_h, o_w, kernel_size])
         batch_weight_list.append(cur_weight_mat)
         # print(torch.max(cur_weight_mat), torch.min(cur_weight_mat))
@@ -183,18 +231,19 @@ class Bicubic(nn.Module):
         [_, _, h, w] = input.shape
 
         indice, offset = get_indice([h, w], output_hw, self.kernel_width)
+        # print(len(offset), offset[0].shape)
+        # print(offset[0][0, :, 12])
         scale_h, scale_w = float(output_hw[0]) / float(h), float(output_hw[1]) / float(w)
-        scale = [scale_h, scale_w] if self.normal_bicubic else None
+        scale = [scale_h, scale_w]
 
         indice = np.asarray(indice[0] - 1, dtype=np.float32)
         indice = torch.from_numpy(indice).cuda().long()
         selected_pixels = input[:, :, indice[..., 0], indice[..., 1]]
 
-        res, kernel = slice_mul(selected_pixels, offset, scale)
+        res, kernel = slice_mul(selected_pixels, offset, scale, self.normal_bicubic)
 
         return res, kernel
 
 
-def build_sampler(kernel_width):
-    return Bicubic(kernel_width, normal_bicubic=True).cuda()
-
+def build_sampler(kernel_width, normal_bicubic=True):
+    return Bicubic(kernel_width, normal_bicubic=normal_bicubic).cuda()

@@ -28,6 +28,7 @@ class Trainer(object):
                  img_channels,
                  block_num,
                  interact_num,
+                 normal_bicubic,
                  pre_trained=None
                  ):
         time_now = datetime.datetime.now()
@@ -46,7 +47,7 @@ class Trainer(object):
 
         info_log(self.log_file, "INFO building trainer!\n")
         self.train_data_loader, self.step_num = build_dataloader(trainset_dirname, batch_size, self.log_file, is_train, num_workers)
-        self.down_sampler = build_sampler(kernel_width)
+        self.down_sampler = build_sampler(kernel_width, normal_bicubic)
         self.sr_model, self.en_decoder = build_model(kernel_width, mid_channels_sr, kpc_dims, implicit_dims, img_channels, block_num, interact_num, self.log_file)
         # print(type(self.sr_model.parameters()), type(self.en_decoder.parameters()))
         if pre_trained is not None:
@@ -131,7 +132,7 @@ class Trainer(object):
 
                 loss_sr = self.loss_function(sr_imgs, hr_imgs)
                 loss_ke = self.loss_function(kernel_estimated, kernel_pc)
-                loss_krc = self.loss_function(kernel_rc, kernels)
+                loss_krc = self.loss_function(kernel_rc * 10.0, kernels * 10.0)
 
                 loss_sr_ke = loss_sr + loss_ke
                 loss_all = loss_sr_ke + loss_krc
@@ -158,6 +159,21 @@ class Trainer(object):
                     if (batch_id + 1) % 40 == 0:
                         # save_tensor2imgs(lr_imgs, os.path.join(self.save_path, "train_imgs"), "lr")
                         save_tensor2imgs(torch.cat([lr_imgs_up, sr_imgs, hr_imgs], dim=3), os.path.join(self.save_path, "train_imgs"), "lr_sr_hr")
+                        # save_tensor2imgs(torch.unsqueeze(torch.squeeze(kernel_pc[0]), dim=1), os.path.join(self.save_path, "kpc"), "kpc", auto_scale=True)
+                        # print(kernel_pc.shape)
+                        # save_tensor2imgs(torch.unsqueeze(torch.squeeze(kernel_estimated[0]), dim=1), os.path.join(self.save_path, "kpc"), "kpc_e", auto_scale=True)
+                        # save_tensor2imgs(torch.unsqueeze(torch.squeeze(kernel_rc[0]), dim=1),
+                        #                  os.path.join(self.save_path, "kpc"), "krc")
+                        # save_tensor2imgs(torch.unsqueeze(torch.squeeze(kernels[0]), dim=1),
+                        #                  os.path.join(self.save_path, "kpc"), "k_o", auto_scale=True)
+                        # print(kernels.shape)
+                        # print(torch.max(kernels[0, 287]), torch.min(kernels[0, 287]))
+                        # print(kernels[0, 287])
+                        # print(kernel_pc.shape)
+                        # for i in range(10):
+                        #     print(torch.max(kernel_pc[0, i]), torch.min(kernel_pc[0, i]))
+                        # print(kernel_pc[0, 1])
+
                 if (batch_id + 1) % (self.step_num // 2) == 0:
                     self.save_pth(epoch, batch_id)
 
@@ -182,13 +198,14 @@ if __name__ == "__main__":
     img_channels = 3
     block_num = 4
     interact_num = 4
+    normal_bicuic = False
     pre_trained = None
     # pre_trained = ["2022_09_02_12_33_31", 1, 5214, 3]
     # pre_trained = ["2022_09_02_16_14_30", 11, 5214, 1]  # 周末训练结果
     # pre_trained = ["2022_09_05_14_19_24", 0, 10428, 2]
     # pre_trained = ["2022_09_05_16_49_10", 10, 10428, 1]
     # pre_trained = ["2022_09_21_02_55_08", 1, 4344, 3] #
-    pre_trained = ["2022_09_26_04_31_28", 0, 8690, 1]
+    # pre_trained = ["2022_09_30_01_19_28", 0, 8690, 1]
 
 
     trainer = Trainer(trainset_dirname,
@@ -202,10 +219,11 @@ if __name__ == "__main__":
                       img_channels,
                       block_num,
                       interact_num,
+                      normal_bicuic,
                       pre_trained
                       )
 
-    # trainer.train(0, 1, mode="1")
+    trainer.train(0, 1, mode="1")
     trainer.train(1, 10, mode="2")
     trainer.close_log()
 
